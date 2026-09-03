@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ระบบสแกนบาร์โค้ดสินค้า</title>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+    body { font-family: 'Sarabun', sans-serif; text-align: center; background-color: #f4f7f6; margin: 0; padding: 20px; }
+    .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); position: relative; }
+    #reader { width: 100%; margin-bottom: 20px; position: relative; }
+    .modal-backdrop {
+        display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.55); z-index: 1000; align-items: center; justify-content: center;
+    }
+    .modal-backdrop.show { display: flex; }
+    .modal-box {
+        background: white; border-radius: 14px; padding: 24px 20px; width: 88%; max-width: 440px;
+        text-align: left; box-shadow: 0 8px 30px rgba(0,0,0,0.3); position: relative;
+        max-height: 85vh; overflow-y: auto; animation: popIn 0.18s ease-out;
+    }
+    @keyframes popIn { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    .modal-box.modal-error { text-align: center; }
+    .modal-box h3 { margin: 0 0 14px 0; font-size: 19px; color: #2c3e50; display: flex; align-items: center; gap: 8px; position: sticky; top: -24px; background: white; padding-top: 4px; }
+    .modal-box h3.ok::before { content: "✅"; }
+    .modal-box .data-row { font-size: 16px; margin-bottom: 9px; line-height: 1.4; }
+    .modal-box .data-row strong { color: #555; display: block; font-size: 12px; margin-bottom: 2px; }
+    .modal-box .data-row.highlight { background: #eef8f0; border-radius: 8px; padding: 8px 10px; }
+    .modal-box .data-row.highlight strong { color: #27ae60; }
+    .modal-box .data-row.highlight span { font-size: 20px; font-weight: bold; color: #1e824c; }
+    .modal-close-btn {
+        display: block; width: 100%; margin-top: 16px; padding: 12px; border: none; border-radius: 8px;
+        background: #3498db; color: white; font-size: 16px; cursor: pointer;
+    }
+    .modal-error .modal-close-btn { background: #e74c3c; }
+    .modal-error-icon { font-size: 40px; margin-bottom: 10px; }
+    #status { margin-bottom: 10px; color: #555; font-size: 14px; }
+    button#reloadBtn { margin-top: 10px; padding: 8px 16px; border: none; border-radius: 6px; background: #3498db; color: white; cursor: pointer; }
+    .manual-entry { margin-top: 20px; padding-top: 15px; border-top: 1px dashed #ccc; text-align: left; }
+    .manual-entry label { display: block; margin-bottom: 8px; font-size: 14px; color: #555; }
+    .manual-row { display: flex; gap: 8px; }
+    .manual-row input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; }
+    .manual-row button { padding: 10px 16px; border: none; border-radius: 6px; background: #2c3e50; color: white; cursor: pointer; }
+    .admin-gear { position: absolute; top: 10px; right: 10px; background: none; border: none; font-size: 20px; opacity: 0.35; cursor: pointer; padding: 6px; }
+    .admin-gear:hover { opacity: 0.8; }
+    .admin-badge { position: absolute; top: 14px; left: 14px; font-size: 11px; background: #2c3e50; color: white; padding: 3px 8px; border-radius: 10px; display: none; }
+    .admin-badge.show { display: inline-block; }
+    .settings-list { max-height: 340px; overflow-y: auto; margin: 12px 0; border: 1px solid #eee; border-radius: 8px; padding: 8px; }
+    .settings-list label { display: flex; align-items: center; gap: 8px; padding: 7px 4px; font-size: 15px; border-bottom: 1px solid #f2f2f2; }
+    .settings-list label:last-child { border-bottom: none; }
+    .settings-empty { color: #888; font-size: 14px; padding: 10px 4px; }
+    .admin-pass-input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; box-sizing: border-box; margin-bottom: 10px; }
+    .admin-note { font-size: 12px; color: #888; margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <div class="admin-badge" id="adminBadge">โหมดแอดมิน</div>
+    <button class="admin-gear" id="adminGearBtn" onclick="openAdminGate()" title="ตั้งค่าแอดมิน">⚙️</button>
+    <h2>สแกนบาร์โค้ดสินค้า</h2>
+    <div id="readerWrap" style="position: relative;">
+        <div id="reader"></div>
+    </div>
+    <div id="status">กำลังโหลดข้อมูลจาก Google Sheets...</div>
+    <button id="reloadBtn" onclick="loadData()">โหลดข้อมูลใหม่</button>
+
+    <div class="manual-entry">
+        <label for="manualBarcode">สแกนไม่ติด? พิมพ์รหัสสินค้าเอง:</label>
+        <div class="manual-row">
+            <input type="text" id="manualBarcode" placeholder="กรอกรหัสบาร์โค้ด (Product Code)" inputmode="numeric">
+            <button onclick="lookupManual()">ค้นหา</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop" onclick="if(event.target===this) hideOverlay()">
+    <div class="modal-box" id="modalBox">
+        <h3 class="ok">รายละเอียดสินค้า</h3>
+        <div id="modalBody"></div>
+        <button class="modal-close-btn" onclick="hideOverlay()">ปิด / สแกนต่อ</button>
+    </div>
+</div>
+
+<div class="modal-backdrop" id="adminGateBackdrop" onclick="if(event.target===this) closeAdminGate()">
+    <div class="modal-box">
+        <h3>เข้าสู่โหมดแอดมิน</h3>
+        <input type="password" id="adminPassInput" class="admin-pass-input" placeholder="รหัสผ่านแอดมิน">
+        <div id="adminGateError" style="color:#e74c3c; font-size:13px; margin-bottom:8px;"></div>
+        <button class="modal-close-btn" onclick="checkAdminPassword()">เข้าสู่ระบบ</button>
+        <button class="modal-close-btn" style="background:#95a5a6; margin-top:8px;" onclick="closeAdminGate()">ยกเลิก</button>
+    </div>
+</div>
+
+<div class="modal-backdrop" id="adminSettingsBackdrop" onclick="if(event.target===this) closeAdminSettings()">
+    <div class="modal-box">
+        <h3>เลือกข้อมูลเพิ่มเติมที่จะแสดงในการ์ด</h3>
+        <div style="font-size:13px; color:#777; margin-bottom:8px;">
+            ข้อมูลหลัก (รหัส/ชื่อ/สต็อก/ราคา/หมวดหมู่/Location) จะแสดงให้ทุกคนเห็นอยู่แล้วเป็นค่าเริ่มต้น<br>
+            ด้านล่างคือ "คอลัมน์อื่นๆ ที่เจอในไฟล์ฐานข้อมูล" — ติ๊กอันไหนก็จะโชว์เพิ่มในการ์ดให้ทุกคนเห็น
+        </div>
+        <div id="settingsList" class="settings-list">กำลังโหลดรายชื่อคอลัมน์...</div>
+        <div id="adminSaveMsg" style="font-size:13px; color:#27ae60;"></div>
+        <button class="modal-close-btn" onclick="saveAdminSettings()">บันทึก</button>
+        <button class="modal-close-btn" style="background:#95a5a6; margin-top:8px;" onclick="closeAdminSettings()">ปิด</button>
+        <div class="admin-note">
+            การตั้งค่านี้มีผลกับผู้ใช้ทุกคนที่เข้าเว็บนี้ทันที •
+            ถ้าเพิ่มคอลัมน์ใหม่ในไฟล์ Google Sheet ทีหลัง (เช่นคอลัมน์ที่ 27) มันจะโผล่มาเป็นตัวเลือกในรายการนี้ให้อัตโนมัติ
+            ไม่ต้องแก้โค้ดใดๆ — แค่กลับมาติ๊กเลือกให้แสดงถ้าต้องการ
+        </div>
+    </div>
+</div>
+
+<script>
+    /* ============ ตั้งค่าหลัก ============ */
+
+    // 1) ลิงก์ CSV จาก Google Sheets — ใช้วิธี File > Share > Publish to web
+    //    เลือกแท็บ "StockReport" แล้วเลือกฟอร์แมต CSV แล้วเอาลิงก์มาใส่แทนตรงนี้
+    //    (ทำครั้งเดียว ข้อมูลในชีตจะอัปเดตสดทุกครั้งที่เปิดเว็บ ไม่ต้อง publish ใหม่)
+    const GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/pub?gid=0&single=true&output=csv";
+
+    // 2) รหัสผ่านแอดมิน (แก้เป็นของคุณเอง)
+    const ADMIN_PASSWORD = "riki2026";
+
+    // 3) ลิงก์ Web App ของ Google Apps Script (ตัวกลางเก็บ "คอลัมน์เพิ่มเติมที่แอดมินเลือกให้แสดง")
+    //    ทำตามไฟล์ apps-script-settings.gs ที่แนบให้แยกต่างหาก แล้วเอาลิงก์ที่ได้มาใส่แทนตรงนี้
+    const SETTINGS_SCRIPT_URL = "ใส่ลิงก์_Apps_Script_Web_App_ตรงนี้";
+
+    // ชื่อคอลัมน์ (ต้องตรงกับหัวตารางในชีตเป๊ะๆ) ที่จะ "แสดงเป็นค่าเริ่มต้นเสมอ" ให้ผู้ใช้ทั่วไปเห็น
+    const BARCODE_COLUMN = 'Product Code';
+    const CORE_COLUMNS = [
+        'Product Name',
+        'Stockqty',
+        'Product Cost',
+        'Stockamnt',
+        'Category Lv1 Name',
+        'Category Lv2 Code',
+        'Category Lv2 Name',
+        'Category Lv3 Code',
+        'Category Lv3 Name',
+        'Category Lv4 Code',
+        'Category Lv4 Name',
+        'Location'
+    ];
+    // ป้ายกำกับภาษาไทยที่จะโชว์แทนชื่อคอลัมน์ดิบ (ถ้าไม่ระบุ จะโชว์ชื่อคอลัมน์ตามที่เจอในชีต)
+    const COLUMN_LABELS = {
+        'Product Name': 'ชื่อสินค้า',
+        'Stockqty': 'จำนวนคงเหลือ',
+        'Product Cost': 'ต้นทุน/หน่วย',
+        'Stockamnt': 'มูลค่าคงเหลือ',
+        'Category Lv1 Name': 'หมวดหมู่ 1',
+        'Category Lv2 Code': 'รหัสหมวดหมู่ 2',
+        'Category Lv2 Name': 'หมวดหมู่ 2',
+        'Category Lv3 Code': 'รหัสหมวดหมู่ 3',
+        'Category Lv3 Name': 'หมวดหมู่ 3',
+        'Category Lv4 Code': 'รหัสหมวดหมู่ 4',
+        'Category Lv4 Name': 'หมวดหมู่ 4',
+        'Location': 'ตำแหน่งจัดเก็บ (Location)'
+    };
+    // คอลัมน์ที่ไม่อยากให้โผล่เป็นตัวเลือกในเมนูแอดมินเลย (ข้อมูลระบบ ไม่มีประโยชน์กับหน้าร้าน) — ลบชื่อออกจากลิสต์นี้ได้ถ้าอยากให้เลือกได้
+    const EXCLUDED_FROM_ADMIN_OPTIONS = ['Picture Path'];
+
+    /* ============ ตัวแปรสถานะ ============ */
+    let allColumns = [];            // ทุกคอลัมน์ที่เจอในชีต (หัวตารางดิบ)
+    let extraColumnsAvailable = []; // = allColumns - CORE_COLUMNS - BARCODE_COLUMN - EXCLUDED_FROM_ADMIN_OPTIONS
+    let visibleExtraColumns = [];   // คอลัมน์เสริมที่แอดมิน "เปิด" ให้แสดง (ค่าเริ่มต้น = ไม่มีเลย)
+    let productDatabase = {};       // { รหัสสินค้า(Product Code): {คอลัมน์: ค่า, ...} }
+    let isAdminLoggedIn = false;
+    let scannerStarted = false;
+    let scanLocked = false;
+
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    /* ============ โหลดข้อมูลสินค้าจาก Google Sheet ============ */
+
+    function loadData() {
+        document.getElementById('status').innerText = "กำลังโหลดข้อมูลจาก Google Sheets...";
+        const urlWithCacheBust = GOOGLE_SHEET_CSV_URL + (GOOGLE_SHEET_CSV_URL.includes('?') ? '&' : '?') + '_=' + Date.now();
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+        fetch(urlWithCacheBust, { signal: controller.signal, cache: 'no-store' })
+            .then(function (response) {
+                clearTimeout(timeoutId);
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.text();
+            })
+            .then(parseCsvText)
+            .catch(function (err) {
+                console.error('โหลดข้อมูลไม่สำเร็จ:', err);
+                document.getElementById('status').innerText =
+                    "โหลดข้อมูลไม่สำเร็จ (" + (err && err.name === 'AbortError' ? 'หมดเวลา/เน็ตช้า' : 'เชื่อมต่อไม่ได้ หรือยังไม่ได้ตั้งค่า GOOGLE_SHEET_CSV_URL') + ") กดปุ่มด้านล่างเพื่อลองใหม่";
+            });
+    }
+
+    function parseCsvText(csvText) {
+        Papa.parse(csvText, {
+            header: true,
+            skipEmptyLines: true,
+            complete: function (results) {
+                const data = results.data;
+                const keys = (results.meta && results.meta.fields) ? results.meta.fields.map(k => k.trim()) : [];
+                console.log('หัวคอลัมน์ที่พบในชีต:', keys);
+
+                allColumns = keys.filter(k => k !== '');
+                extraColumnsAvailable = allColumns.filter(k =>
+                    k !== BARCODE_COLUMN &&
+                    CORE_COLUMNS.indexOf(k) === -1 &&
+                    EXCLUDED_FROM_ADMIN_OPTIONS.indexOf(k) === -1
+                );
+
+                productDatabase = {};
+                data.forEach(row => {
+                    const rowKeys = Object.keys(row);
+                    const findKey = (target) => rowKeys.find(k => k.trim() === target);
+                    const barcodeKey = findKey(BARCODE_COLUMN);
+                    if (!barcodeKey) return;
+
+                    let rawBarcode = String(row[barcodeKey] || '').trim();
+                    if (!rawBarcode) return;
+
+                    const entry = {};
+                    rowKeys.forEach(k => {
+                        const cleanKey = k.trim();
+                        if (cleanKey !== '' && cleanKey !== BARCODE_COLUMN) entry[cleanKey] = row[k];
+                    });
+
+                    productDatabase[rawBarcode] = entry;
+                    productDatabase[rawBarcode.replace(/^0+/, '')] = entry;
+                    productDatabase['0' + rawBarcode] = entry;
+                });
+
+                console.log('จำนวนสินค้าในฐานข้อมูล:', data.length);
+                document.getElementById('status').innerText = "พร้อมสแกนแล้ว! (สินค้าทั้งหมด " + data.length + " รายการ)";
+
+                loadVisibleColumnSettings();
+                if (!scannerStarted) {
+                    startScanner();
+                    scannerStarted = true;
+                }
+            },
+            error: function (error) {
+                document.getElementById('status').innerText = "เกิดข้อผิดพลาดในการแปลงข้อมูล CSV";
+                console.error(error);
+            }
+        });
+    }
+
+    /* ============ ค้นหาและแสดงผลสินค้า ============ */
+
+    function labelFor(col) {
+        return COLUMN_LABELS[col] || col;
+    }
+
+    function formatValue(col, val) {
+        if (val === undefined || val === null || val === '') return '-';
+        const num = Number(val);
+        if (!isNaN(num) && val !== '' && /Cost|Stockamnt|Stockqty/i.test(col)) {
+            return num.toLocaleString('th-TH', { maximumFractionDigits: 2 });
+        }
+        return String(val);
+    }
+
+    function lookupBarcode(rawCode) {
+        const code = String(rawCode).trim();
+        const product = productDatabase[code]
+            || productDatabase[code.replace(/^0+/, '')]
+            || productDatabase['0' + code];
+
+        if (product) {
+            showSuccessModal(code, product);
+        } else {
+            showErrorModal(code);
+        }
+    }
+
+    function showSuccessModal(code, product) {
+        const box = document.getElementById('modalBox');
+        box.classList.remove('modal-error');
+        box.querySelector('h3').className = 'ok';
+        box.querySelector('h3').innerText = 'รายละเอียดสินค้า';
+
+        let html = `<div class="data-row highlight"><strong>Barcode / Product Code</strong><span>${escapeHtml(code)}</span></div>`;
+
+        CORE_COLUMNS.forEach(col => {
+            html += `<div class="data-row"><strong>${escapeHtml(labelFor(col))}</strong><span>${escapeHtml(formatValue(col, product[col]))}</span></div>`;
+        });
+
+        visibleExtraColumns.forEach(col => {
+            if (CORE_COLUMNS.indexOf(col) !== -1) return; // กันแสดงซ้ำ
+            html += `<div class="data-row"><strong>${escapeHtml(labelFor(col))}</strong><span>${escapeHtml(formatValue(col, product[col]))}</span></div>`;
+        });
+
+        document.getElementById('modalBody').innerHTML = html;
+        document.getElementById('modalBackdrop').classList.add('show');
+    }
+
+    function showErrorModal(code) {
+        const box = document.getElementById('modalBox');
+        box.classList.add('modal-error');
+        box.querySelector('h3').className = '';
+        box.querySelector('h3').style.justifyContent = 'center';
+        box.querySelector('h3').innerHTML = '❌ ไม่พบข้อมูลสินค้า';
+        document.getElementById('modalBody').innerHTML =
+            `<div class="data-row" style="text-align:center;">รหัส: ${escapeHtml(code)}</div>`;
+        document.getElementById('modalBackdrop').classList.add('show');
+    }
+
+    function hideOverlay() {
+        document.getElementById('modalBackdrop').classList.remove('show');
+        scanLocked = false;
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.innerText = str;
+        return div.innerHTML;
+    }
+
+    function lookupManual() {
+        const input = document.getElementById('manualBarcode');
+        if (input.value.trim()) lookupBarcode(input.value);
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+        const input = document.getElementById('manualBarcode');
+        if (input) input.addEventListener('keydown', function (e) { if (e.key === 'Enter') lookupManual(); });
+    });
+
+    /* ============ กล้อง/สแกนเนอร์ (ปรับให้ iOS แม่นขึ้น) ============ */
+
+    function onScanSuccess(decodedText) {
+        if (scanLocked) return;
+        scanLocked = true;
+        lookupBarcode(decodedText);
+    }
+    function onScanFailure() { /* เงียบไว้ตอนยังหาโค้ดไม่เจอ ไม่ต้องโชว์ error รัวๆ */ }
+
+    function startScanner() {
+        if (isIOS && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            document.getElementById('status').innerText = "กำลังขอสิทธิ์ใช้กล้อง กรุณากด \"Allow\" ที่เบราว์เซอร์...";
+            navigator.mediaDevices.getUserMedia({
+                video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+            })
+                .then(function (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    document.getElementById('status').innerText = "กำลังเปิดกล้อง...";
+                    renderScannerWidget();
+                })
+                .catch(function (err) {
+                    console.error('ขอสิทธิ์กล้องไม่สำเร็จ:', err);
+                    document.getElementById('status').innerText =
+                        "ไม่ได้รับอนุญาตให้ใช้กล้อง กรุณาไปที่ ตั้งค่า > Safari > กล้อง แล้วอนุญาตเว็บนี้ จากนั้นโหลดหน้านี้ใหม่";
+                });
+        } else {
+            renderScannerWidget();
+        }
+    }
+
+    function renderScannerWidget() {
+        const iosVideoConstraints = {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            advanced: [{ focusMode: "continuous" }]
+        };
+        try {
+            const scanner = new Html5QrcodeScanner(
+                "reader",
+                {
+                    fps: isIOS ? 12 : 15,
+                    qrbox: function (viewfinderWidth, viewfinderHeight) {
+                        const wRatio = isIOS ? 0.92 : 0.85;
+                        const w = Math.floor(viewfinderWidth * wRatio);
+                        const h = Math.floor(Math.min(viewfinderHeight * 0.55, w * 0.55));
+                        return { width: w, height: h };
+                    },
+                    aspectRatio: isIOS ? 1.7777 : 1.5,
+                    videoConstraints: isIOS ? iosVideoConstraints : undefined,
+                    formatsToSupport: [
+                        Html5QrcodeSupportedFormats.QR_CODE,
+                        Html5QrcodeSupportedFormats.CODE_128,
+                        Html5QrcodeSupportedFormats.CODE_39,
+                        Html5QrcodeSupportedFormats.EAN_13,
+                        Html5QrcodeSupportedFormats.EAN_8,
+                        Html5QrcodeSupportedFormats.UPC_A,
+                        Html5QrcodeSupportedFormats.UPC_E,
+                        Html5QrcodeSupportedFormats.ITF
+                    ],
+                    experimentalFeatures: { useBarCodeDetectorIfSupported: !isIOS },
+                    rememberLastUsedCamera: true,
+                    showTorchButtonIfSupported: true,
+                    showZoomSliderIfSupported: true,
+                    defaultZoomValueIfSupported: isIOS ? 1.5 : 2
+                },
+                /* verbose= */ false
+            );
+            scanner.render(onScanSuccess, onScanFailure);
+            if (isIOS) {
+                document.getElementById('status').innerText =
+                    "พร้อมสแกนแล้ว! ถ้าสแกนไม่ติด ลองเปิดไฟฉาย 🔦 และขยับให้บาร์โค้ดเต็มกรอบเหลี่ยม";
+            }
+        } catch (e) {
+            console.error('เปิดกล้องด้วยค่าตั้งต้นไม่สำเร็จ ลองใช้ค่าพื้นฐานแทน:', e);
+            const fallback = new Html5QrcodeScanner(
+                "reader",
+                { fps: 10, qrbox: { width: 280, height: 180 }, videoConstraints: isIOS ? iosVideoConstraints : undefined },
+                /* verbose= */ false
+            );
+            fallback.render(onScanSuccess, onScanFailure);
+        }
+    }
+
+    /* ============ ระบบแอดมิน: ล็อกอิน + เลือกคอลัมน์เสริม ============ */
+
+    function openAdminGate() {
+        document.getElementById('adminPassInput').value = '';
+        document.getElementById('adminGateError').innerText = '';
+        document.getElementById('adminGateBackdrop').classList.add('show');
+    }
+    function closeAdminGate() {
+        document.getElementById('adminGateBackdrop').classList.remove('show');
+    }
+    function checkAdminPassword() {
+        const val = document.getElementById('adminPassInput').value;
+        if (val === ADMIN_PASSWORD) {
+            isAdminLoggedIn = true;
+            document.getElementById('adminBadge').classList.add('show');
+            closeAdminGate();
+            openAdminSettings();
+        } else {
+            document.getElementById('adminGateError').innerText = 'รหัสผ่านไม่ถูกต้อง';
+        }
+    }
+
+    function openAdminSettings() {
+        const listEl = document.getElementById('settingsList');
+        document.getElementById('adminSaveMsg').innerText = '';
+        if (extraColumnsAvailable.length === 0) {
+            listEl.innerHTML = '<div class="settings-empty">ยังไม่มีคอลัมน์เสริมให้เลือก (รอโหลดข้อมูลสินค้าให้เสร็จก่อน หรือทุกคอลัมน์ในไฟล์ถูกแสดงเป็นค่าเริ่มต้นอยู่แล้ว)</div>';
+        } else {
+            listEl.innerHTML = extraColumnsAvailable.map(col => {
+                const checked = visibleExtraColumns.indexOf(col) !== -1 ? 'checked' : '';
+                return `<label><input type="checkbox" value="${escapeHtml(col)}" ${checked}> ${escapeHtml(labelFor(col))} <span style="color:#aaa; font-size:12px;">(${escapeHtml(col)})</span></label>`;
+            }).join('');
+        }
+        document.getElementById('adminSettingsBackdrop').classList.add('show');
+    }
+    function closeAdminSettings() {
+        document.getElementById('adminSettingsBackdrop').classList.remove('show');
+    }
+
+    function saveAdminSettings() {
+        const checkboxes = Array.from(document.querySelectorAll('#settingsList input[type=checkbox]'));
+        const checked = checkboxes.filter(cb => cb.checked).map(cb => cb.value);
+        visibleExtraColumns = checked;
+
+        try { localStorage.setItem('visibleExtraColumns_backup', JSON.stringify(checked)); } catch (e) {}
+
+        const msgEl = document.getElementById('adminSaveMsg');
+
+        if (!SETTINGS_SCRIPT_URL || SETTINGS_SCRIPT_URL.indexOf('ใส่ลิงก์') === 0) {
+            msgEl.style.color = '#e74c3c';
+            msgEl.innerText = 'ยังไม่ได้ตั้งค่า Apps Script URL — บันทึกไว้ในเครื่องนี้เท่านั้น (ยังไม่มีผลกับคนอื่น)';
+            return;
+        }
+
+        msgEl.style.color = '#555';
+        msgEl.innerText = 'กำลังบันทึก...';
+
+        fetch(SETTINGS_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ visibleExtraColumns: checked })
+        })
+            .then(res => res.json())
+            .then(() => {
+                msgEl.style.color = '#27ae60';
+                msgEl.innerText = 'บันทึกเรียบร้อย มีผลกับทุกคนแล้ว';
+            })
+            .catch(err => {
+                console.error('บันทึกการตั้งค่าไม่สำเร็จ:', err);
+                msgEl.style.color = '#e74c3c';
+                msgEl.innerText = 'บันทึกไปยังส่วนกลางไม่สำเร็จ (บันทึกในเครื่องนี้ไว้แล้ว)';
+            });
+    }
+
+    function loadVisibleColumnSettings() {
+        try {
+            const backup = localStorage.getItem('visibleExtraColumns_backup');
+            if (backup) visibleExtraColumns = JSON.parse(backup);
+        } catch (e) {}
+
+        if (!SETTINGS_SCRIPT_URL || SETTINGS_SCRIPT_URL.indexOf('ใส่ลิงก์') === 0) return;
+
+        fetch(SETTINGS_SCRIPT_URL, { cache: 'no-store' })
+            .then(res => res.json())
+            .then(data => {
+                if (data && Array.isArray(data.visibleExtraColumns)) {
+                    visibleExtraColumns = data.visibleExtraColumns;
+                    console.log('โหลดคอลัมน์เสริมที่เปิดแสดง:', visibleExtraColumns);
+                }
+            })
+            .catch(err => console.warn('โหลดการตั้งค่าส่วนกลางไม่สำเร็จ ใช้ค่าสำรองในเครื่องแทน:', err));
+    }
+
+    loadData();
+</script>
+
+</body>
+</html>
